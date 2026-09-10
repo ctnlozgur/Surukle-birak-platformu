@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
-st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Süper bilet ciroları fiyat bazında (örn: 1575₺ ve 1350₺) ayrı ayrı hesaplanır ve çifte sayım (double-counting) engellenerek **gerçek indirimli ciro** yansıtılır.")
+st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Boşluk (whitespace) hataları giderilmiş, kuruşlu fiyatlar korunmuş ve Süper Bilet ciroları kusursuz ayrıştırılmıştır.")
 
 # --- 🧠 KALICI HAFIZA SİSTEMİ ---
 if "kalici_fiyatlar" not in st.session_state:
@@ -31,7 +31,7 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Rapor işleniyor, Gerçek cirolar (İndirimli) ayrıştırılıyor...'):
+    with st.spinner('Rapor işleniyor, Gerçek cirolar ayrıştırılıyor...'):
         
         # 1. HAM VERİYİ VE TARİHİ OKUMA
         df_raw = pd.read_excel(uploaded_file, header=None)
@@ -51,10 +51,15 @@ if uploaded_file is not None:
         df_main = df_main[~df_main['Alt Kategori'].astype(str).str.contains("TOPLAM|Fiyat Bazında", na=False, case=False)]
         df_main = df_main[~df_main['Alt Kategori'].apply(lambda x: str(x).isnumeric() or str(x).replace('.','',1).isdigit())]
         
+        # BOŞLUK (WHITESPACE) TEMİZLİĞİ
+        df_main['Alt Kategori'] = df_main['Alt Kategori'].astype(str).str.strip()
+        
         for col in ['Fiyat', 'İnd. Fiyat', 'Stok', 'Kalan Stok']:
-            df_main[col] = pd.to_numeric(df_main[col], errors='coerce').fillna(0)
+            # Yuvarlama yapmadan float olarak alıyoruz
+            df_main[col] = pd.to_numeric(df_main[col], errors='coerce').fillna(0.0)
             
         df_main['Satılan'] = df_main['Stok'] - df_main['Kalan Stok']
+        # Gerçek satılan fiyat baz alınıyor
         df_main['Gecerli_Fiyat'] = df_main['İnd. Fiyat'] 
 
         # 3. SÜPER BİLETLERİ AYIKLAMA
@@ -65,18 +70,23 @@ if uploaded_file is not None:
                 df_super = df_raw.iloc[7:, 7:14].copy()
                 df_super.columns = ['Alt Kategori', 'İndirim Türü', 'İndirim Oranı', 'Fiyat', 'SB İnd. Fiyat', 'Satılan', 'Kalan Stok']
                 df_super = df_super.dropna(subset=['Alt Kategori', 'Fiyat'])
+                
+                # BOŞLUK (WHITESPACE) TEMİZLİĞİ
+                df_super['Alt Kategori'] = df_super['Alt Kategori'].astype(str).str.strip()
+                
                 for col in ['Fiyat', 'SB İnd. Fiyat', 'Satılan', 'Kalan Stok']:
-                    df_super[col] = pd.to_numeric(df_super[col], errors='coerce').fillna(0)
+                    df_super[col] = pd.to_numeric(df_super[col], errors='coerce').fillna(0.0)
 
         # 4. YENİ BİRLEŞTİRME VE ÇİFTE SAYIM (SPLIT) ALGORİTMA
         if not df_super.empty:
-            # Sadece kategorinin toplam süper bilet satılanını al (Ortalama fiyata dokunma)
-            df_super_agg = df_super.groupby('Alt Kategori')['Satılan'].sum().reset_index().rename(columns={'Satılan': 'Toplam_SB_Satılan'})
+            # Sadece kategorinin toplam süper bilet satılan miktarını hesapla (Fiyat ortalaması ALINMIYOR)
+            df_super_agg = df_super.groupby('Alt Kategori', as_index=False)['Satılan'].sum()
+            df_super_agg.rename(columns={'Satılan': 'Toplam_SB_Satılan'}, inplace=True)
 
             merged = pd.merge(df_main, df_super_agg, on='Alt Kategori', how='left')
-            merged['Toplam_SB_Satılan'] = merged['Toplam_SB_Satılan'].fillna(0)
+            merged['Toplam_SB_Satılan'] = merged['Toplam_SB_Satılan'].fillna(0.0)
             
-            # Ana stok havuzundan süper biletleri eksiltiyoruz
+            # Ana stok havuzundan süper bilet miktarını düş
             merged['Normal_Satılan'] = merged['Satılan'] - merged['Toplam_SB_Satılan']
             merged['Normal_Satılan'] = merged['Normal_Satılan'].apply(lambda x: x if x > 0 else 0)
             
@@ -87,12 +97,13 @@ if uploaded_file is not None:
             df_normal['Is_Super_Bilet'] = False
             df_normal['Fiyat'] = df_normal['Gecerli_Fiyat'] 
             
-            # B. Süper Bilet Satırları (Aynı kategorideki farklı indirimleri fiyata göre ayrı satırlara bölüyoruz)
+            # B. Süper Bilet Satırları (Her bir indirim satırını kendi fiyatıyla tutuyoruz)
             df_sb = df_super[df_super['Satılan'] > 0].copy()
-            df_sb['Alt Kategori'] = df_sb['Alt Kategori'].astype(str) + " (Süper Bilet - " + df_sb['SB İnd. Fiyat'].astype(int).astype(str) + "₺)"
+            # Bilet adını fiyatıyla birleştiriyoruz ki birbirini ezmesin
+            df_sb['Alt Kategori'] = df_sb['Alt Kategori'] + " (Süper Bilet - " + df_sb['SB İnd. Fiyat'].astype(str) + " ₺)"
             df_sb['Fiyat'] = df_sb['SB İnd. Fiyat'] 
             df_sb['Satılan'] = df_sb['Satılan']
-            df_sb['Kalan Stok'] = 0
+            df_sb['Kalan Stok'] = 0.0
             df_sb['Stok'] = df_sb['Satılan']
             df_sb['Is_Super_Bilet'] = True
             
@@ -120,7 +131,7 @@ if uploaded_file is not None:
             elif "vip" in name_clean: return f"VIP{cift_mi}"
             elif "genel giriş" in name_clean or "genel giris" in name_clean: return f"Genel Giriş{cift_mi}"
             elif "ayakta" in name_clean: return f"Ayakta{cift_mi}"
-            elif "davetiye" in name_clean: return f"Davetiye{cift_mi}"
+            elif "davetiye" in name_clean or "davet" in name_clean: return f"Davetiye{cift_mi}"
             else: return f"Diğer{cift_mi}"
 
         df['Ana Kategori'] = df['Alt Kategori'].apply(categorize)
@@ -136,6 +147,7 @@ if uploaded_file is not None:
         konsolide_df['Doluluk Oranı'] = konsolide_df.apply(
             lambda x: x['Satılan'] / x['Stok'] if x['Stok'] > 0 else 0, axis=1
         )
+        # Bilet adedi ile kuruşlu gerçek fiyatın birebir çarpımı
         konsolide_df['Mevcut Ciro'] = konsolide_df['Satılan'] * konsolide_df['Fiyat']
 
         # 7. BOT ALGORİTMASI
@@ -247,27 +259,29 @@ if uploaded_file is not None:
         
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("⏳ Kalan Gün", f"{kalan_gun}")
-        col2.metric("Toplam Kapasite", f"{toplam_stok}")
-        col3.metric("Satılan Bilet", f"{toplam_satilan}")
+        col2.metric("Toplam Kapasite", f"{toplam_stok:,.0f}")
+        col3.metric("Satılan Bilet", f"{toplam_satilan:,.0f}")
         col4.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
-        col5.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.0f}")
-        col6.metric("🔥 Toplam Hedef Ciro", f"₺{potansiyel_maks_ciro:,.0f}")
+        # Küsuratlı (float) tutarlar formatlandı
+        col5.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.2f}")
+        col6.metric("🔥 Toplam Hedef Ciro", f"₺{potansiyel_maks_ciro:,.2f}")
 
         st.divider()
 
         # BÖLÜM 1: ALT KATEGORİ
         st.markdown("### 🤖 V4.0 Alt Kategori Bazlı Detaylı Tablo ve Öneriler")
         
+        # Format sözlüğünde fiyat ve cirolar kuruşlu değer (2 ondalık) olacak şekilde ayarlandı
         format_dict_detay = {
             'Stok': '{:,.0f}',
             'Satılan': '{:,.0f}',
             'Kalan Stok': '{:,.0f}',
-            'Fiyat': '₺{:,.0f}',
+            'Fiyat': '₺{:,.2f}',
             'Doluluk Oranı': '{:.1%}',
-            'Mevcut Ciro': '₺{:,.0f}',
-            'Önerilen Fiyat (TL)': '₺{:,.0f}',
-            '✍️ Manuel Yeni Fiyat': '{:.0f}', 
-            'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
+            'Mevcut Ciro': '₺{:,.2f}',
+            'Önerilen Fiyat (TL)': '₺{:,.2f}',
+            '✍️ Manuel Yeni Fiyat': '{:.2f}', 
+            'Hedef Sold-Out Ciro (TL)': '₺{:,.2f}'
         }
         
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
@@ -315,12 +329,12 @@ if uploaded_file is not None:
             'Stok': '{:,.0f}',
             'Satılan': '{:,.0f}',
             'Kalan Stok': '{:,.0f}',
-            'Fiyat': '₺{:,.0f}',
+            'Fiyat': '₺{:,.2f}',
             'Doluluk Oranı': '{:.1%}',
-            'Mevcut Ciro': '₺{:,.0f}',
-            'Önerilen Ort. Fiyat': '₺{:,.0f}',
-            '✍️ Manuel Yeni Fiyat': '{:.0f}', 
-            'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
+            'Mevcut Ciro': '₺{:,.2f}',
+            'Önerilen Ort. Fiyat': '₺{:,.2f}',
+            '✍️ Manuel Yeni Fiyat': '{:.2f}', 
+            'Hedef Sold-Out Ciro (TL)': '₺{:,.2f}'
         }
         
         kilitli_sutunlar_ana = [col for col in ana_kategori_df.columns if col != '✍️ Manuel Yeni Fiyat']
