@@ -125,6 +125,13 @@ if uploaded_file is not None:
 
         # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
         st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
+        # YENİ: Manuel Fiyat Girdisi Sütunu Ekliyoruz
+        # Başlangıçta botun önerisiyle dolsun (sıfırdan yazmakla uğraşmaman için)
+        sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
+        konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
+
+        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
+        st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
         
         # Tabloyu formatlı gösterme
         format_dict = {
@@ -155,23 +162,6 @@ if uploaded_file is not None:
         
         # İleride sisteme yeni özellikler katmak istersen, "edited_df" değişkeni
         # senin manuel olarak girdiğin fiyatları tutar. Bu sayede manuel ciro projeksiyonu da yaptırabiliriz.
-        # Tabloyu formatlı gösterme
-        format_dict = {
-            'Stok': '{:,.0f}',
-            'Satılan': '{:,.0f}',
-            'Kalan Stok': '{:,.0f}',
-            'Fiyat': '₺{:,.0f}',
-            'Doluluk Oranı': '{:.1%}',
-            'Mevcut Ciro': '₺{:,.0f}',
-            'Önerilen Fiyat (TL)': '₺{:,.0f}',
-            'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
-        }
-        
-        st.dataframe(konsolide_df.style.format(format_dict).map(
-            lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
-                      ('background-color: #f8d7da' if '⚠️' in str(x) or '📉' in str(x) else ''), 
-            subset=['Bot Aksiyonu']
-        ), use_container_width=True)
 
         # GRAFİK: DOLULUK ORANLARI
         st.markdown("### 📈 Kategori Doluluk Hızları")
