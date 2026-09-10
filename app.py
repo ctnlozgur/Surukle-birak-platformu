@@ -253,9 +253,10 @@ if uploaded_file is not None:
         
         ana_kategori_df = ana_kategori_df[['Ana Kategori', 'Stok', 'Satılan', 'Kalan Stok', 'Fiyat', 'Doluluk Oranı', 'Mevcut Ciro', 'Önerilen Ort. Fiyat', '✍️ Manuel Yeni Fiyat', 'Genel Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)', 'Sifir_Stok_Mu']]
 
-        # 11. TOP KPI 
+        # 11. TOP KPI
         toplam_stok = int(ana_kategori_df['Stok'].sum())
         toplam_satilan = int(ana_kategori_df['Satılan'].sum())
+        kalan_toplam_stok = toplam_stok - toplam_satilan # YENİ EKLENDİ
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
         mevcut_toplam_ciro = ana_kategori_df['Mevcut Ciro'].sum()
         potansiyel_maks_ciro = ana_kategori_df['Hedef Sold-Out Ciro (TL)'].sum()
@@ -263,18 +264,20 @@ if uploaded_file is not None:
         # --- ARAYÜZ ---
         st.divider()
         
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        # KPI paneline Kalan Stok Eklendi
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         col1.metric("⏳ Kalan Gün", f"{kalan_gun}")
         col2.metric("Toplam Kapasite", f"{toplam_stok:,.0f}")
         col3.metric("Satılan Bilet", f"{toplam_satilan:,.0f}")
-        col4.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
-        col5.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.2f}")
-        col6.metric("🔥 Tahmini Hedef Ciro", f"₺{potansiyel_maks_ciro:,.2f}")
+        col4.metric("Kalan Stok", f"{kalan_toplam_stok:,.0f}")
+        col5.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
+        col6.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.2f}")
+        col7.metric("🔥 Tahmini Hedef Ciro", f"₺{potansiyel_maks_ciro:,.2f}")
 
         st.divider()
 
         # BÖLÜM 1: ALT KATEGORİ
-        st.markdown("### 🤖 V4.0 Alt Kategori Bazlı Detaylı Tablo ve Öneriler")
+        st.markdown("###  Alt Kategori Bazlı Detaylı Tablo ve Öneriler")
         
         format_dict_detay = {
             'Stok': '{:,.0f}',
@@ -291,11 +294,12 @@ if uploaded_file is not None:
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
 
         def row_color(row):
-            if row.get('Is_Super_Bilet', False):
+            # Tükendi veya Aksiyon Yok ise Gri (#f0f0f0)
+            if '✅ Sold-Out' in str(row['Bot Aksiyonu']) or 'Aksiyon Yok' in str(row['Bot Aksiyonu']):
+                return ['background-color: #f0f0f0'] * len(row)
+            elif row.get('Is_Super_Bilet', False):
                 return ['background-color: #ffe8cc'] * len(row)
-            elif float(row['Kalan Stok']) <= 0:
-                return ['background-color: #ffcccc'] * len(row)
-            elif '🚀' in str(row['Bot Aksiyonu']) or '✅' in str(row['Bot Aksiyonu']):
+            elif '🚀' in str(row['Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
             elif '📉' in str(row['Bot Aksiyonu']):
                 return ['background-color: #cce5ff'] * len(row)
@@ -327,7 +331,7 @@ if uploaded_file is not None:
         st.divider()
 
         # BÖLÜM 3: ANA KATEGORİ (DÜZENLENEBİLİR)
-        st.markdown("### 📊 Ana Kategori Toplu Özet Görünümü (Düzenlenebilir)")
+        st.markdown("### 📊 Ana Kategori Toplu Özet Görünümü")
         
         format_dict_ana = {
             'Stok': '{:,.0f}',
@@ -344,9 +348,9 @@ if uploaded_file is not None:
         kilitli_sutunlar_ana = [col for col in ana_kategori_df.columns if col != '✍️ Manuel Yeni Fiyat']
         
         def row_color_ana(row):
-            if float(row['Kalan Stok']) <= 0:
-                return ['background-color: #ffcccc'] * len(row)
-            elif '🚀' in str(row['Genel Bot Aksiyonu']) or '✅' in str(row['Genel Bot Aksiyonu']):
+            if '✅ Sold-Out' in str(row['Genel Bot Aksiyonu']) or 'Aksiyon Yok' in str(row['Genel Bot Aksiyonu']):
+                return ['background-color: #f0f0f0'] * len(row)
+            elif '🚀' in str(row['Genel Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
             elif '📉' in str(row['Genel Bot Aksiyonu']):
                 return ['background-color: #cce5ff'] * len(row)
