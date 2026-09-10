@@ -6,7 +6,7 @@ import plotly.express as px
 # --- SAYFA AYARLARI VE BAŞLIK ---
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
-st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
+st.title("🎫 Dinamik Biletleme ve Fiyatlandırma")
 st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Sıfır stoklu biletleri en altta kırmızı renkte görebilirsiniz. Hem detay tablosunda hem de ana kategori özetinde fiyatları manuel düzenleyebilirsiniz; tüm değişiklikler doğrudan toplam ciro hedefini etkiler.")
 
 # --- 🧠 KALICI HAFIZA SİSTEMİ ---
@@ -223,7 +223,7 @@ if uploaded_file is not None:
         st.divider()
 
         # BÖLÜM 1: ALT KATEGORİ
-        st.markdown("### 🤖 V4.0 Alt Kategori Bazlı Detaylı Tablo ve Öneriler")
+        st.markdown("Alt Kategori Bazlı Detaylı Tablo ve Öneriler")
         
         format_dict_detay = {
             'Stok': '{:,.0f}',
