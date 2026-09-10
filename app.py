@@ -131,7 +131,7 @@ if uploaded_file is not None:
             'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
         }
         
-        st.dataframe(konsolide_df.style.format(format_dict).applymap(
+        st.dataframe(konsolide_df.style.format(format_dict).map(
             lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
                       ('background-color: #f8d7da' if '⚠️' in str(x) or '📉' in str(x) else ''), 
             subset=['Bot Aksiyonu']
