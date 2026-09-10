@@ -22,7 +22,6 @@ with st.sidebar:
     st.info("Algoritma, bu hedef doluluğa ve biletlerin erime hızına göre fiyat önerileri sunar.")
     
     st.divider()
-    # Hata yapıldığında her şeyi botun ilk haline döndüren sıfırlama butonu
     if st.button("🔄 Manuel Fiyatları Sıfırla", use_container_width=True):
         st.session_state.kalici_fiyatlar = {}
         st.session_state.ana_kalici_fiyatlar = {}
@@ -126,9 +125,16 @@ if uploaded_file is not None:
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # 7. SIRALAMA (0 Stok Kesinlikle En Alta Atılır)
+        # 7. SIRALAMA VE SÜTUN YER DEĞİŞTİRME 
         konsolide_df['Sifir_Stok_Mu'] = konsolide_df['Kalan Stok'] <= 0
         konsolide_df = konsolide_df.sort_values(by=['Sifir_Stok_Mu', 'Ana Kategori', 'Alt Kategori']).reset_index(drop=True)
+        
+        # Sütun sırasını Alt Kategori başa gelecek şekilde ayarlıyoruz
+        mevcut_sutunlar = konsolide_df.columns.tolist()
+        mevcut_sutunlar.remove('Alt Kategori')
+        mevcut_sutunlar.remove('Ana Kategori')
+        yeni_sutun_sirasi = ['Alt Kategori', 'Ana Kategori'] + mevcut_sutunlar
+        konsolide_df = konsolide_df[yeni_sutun_sirasi]
 
         # 8. ALT KATEGORİ MANUEL FİYAT VE HAFIZA
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
@@ -150,13 +156,13 @@ if uploaded_file is not None:
 
         konsolide_df['Hedef Sold-Out Ciro (TL)'] = (konsolide_df['✍️ Manuel Yeni Fiyat'] * konsolide_df['Kalan Stok']) + konsolide_df['Mevcut Ciro']
 
-        # 9. ANA KATEGORİ KONSOLİDASYONU (Çift Yönlü İletişim)
+        # 9. ANA KATEGORİ KONSOLİDASYONU
         ana_kategori_df = konsolide_df.groupby('Ana Kategori').agg({
             'Stok': 'sum',
             'Satılan': 'sum',
             'Kalan Stok': 'sum',
             'Mevcut Ciro': 'sum',
-            'Hedef Sold-Out Ciro (TL)': 'sum' # Alt kategorilerin manuel girişleri buraya toplanır
+            'Hedef Sold-Out Ciro (TL)': 'sum' 
         }).reset_index()
 
         ana_fiyat_df = konsolide_df.groupby('Ana Kategori')['Fiyat'].mean().reset_index()
@@ -168,8 +174,6 @@ if uploaded_file is not None:
         
         ana_kategori_df[['Önerilen Ort. Fiyat', 'Genel Bot Aksiyonu']] = ana_kategori_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # ANA KATEGORİ İÇİN MANUEL FİYAT
-        # Eğer kullanıcı Alt Tabloda değişiklik yaptıysa Ana Kategori'nin varsayılanı ona göre hesaplanır
         ana_kategori_df['Varsayılan Fiyat'] = ana_kategori_df.apply(
             lambda x: (x['Hedef Sold-Out Ciro (TL)'] - x['Mevcut Ciro']) / x['Kalan Stok'] if x['Kalan Stok'] > 0 else x['Önerilen Ort. Fiyat'], axis=1
         )
@@ -191,16 +195,14 @@ if uploaded_file is not None:
                     ana_kat = ana_kategori_df.loc[row_idx, 'Ana Kategori']
                     st.session_state.ana_kalici_fiyatlar[ana_kat] = yeni_deger
 
-        # Ana Kategori Hedef Ciro, kendi 'Manuel Yeni Fiyat'ına göre tekrar hesaplanır
         ana_kategori_df['Hedef Sold-Out Ciro (TL)'] = (ana_kategori_df['✍️ Manuel Yeni Fiyat'] * ana_kategori_df['Kalan Stok']) + ana_kategori_df['Mevcut Ciro']
         
-        # SIFIR STOK RENKLENDİRME İÇİN ANA KATEGORİYİ DE SIRALA
         ana_kategori_df['Sifir_Stok_Mu'] = ana_kategori_df['Kalan Stok'] <= 0
         ana_kategori_df = ana_kategori_df.sort_values(by=['Sifir_Stok_Mu', 'Ana Kategori']).reset_index(drop=True)
         
         ana_kategori_df = ana_kategori_df[['Ana Kategori', 'Stok', 'Satılan', 'Kalan Stok', 'Fiyat', 'Doluluk Oranı', 'Mevcut Ciro', 'Önerilen Ort. Fiyat', '✍️ Manuel Yeni Fiyat', 'Genel Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)', 'Sifir_Stok_Mu']]
 
-        # 10. TOP KPI (En üstte görünen ciro artık Ana Kategori'den besleniyor)
+        # 10. TOP KPI
         toplam_stok = int(ana_kategori_df['Stok'].sum())
         toplam_satilan = int(ana_kategori_df['Satılan'].sum())
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
@@ -239,13 +241,15 @@ if uploaded_file is not None:
 
         def row_color(row):
             if float(row['Kalan Stok']) <= 0:
-                return ['background-color: #ffcccc'] * len(row) # Tüm satırı net bir kırmızı yapar
+                return ['background-color: #ffcccc'] * len(row)
             elif row['Is_Super_Bilet']:
                 return ['background-color: #ffe8cc'] * len(row)
             elif '🚀' in str(row['Bot Aksiyonu']) or '✅' in str(row['Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
-            elif '⚠️' in str(row['Bot Aksiyonu']) or '📉' in str(row['Bot Aksiyonu']):
-                return ['background-color: #f8d7da'] * len(row)
+            elif '📉' in str(row['Bot Aksiyonu']):
+                return ['background-color: #cce5ff'] * len(row) # Yavaş Satış (Açık Mavi)
+            elif '⚠️' in str(row['Bot Aksiyonu']):
+                return ['background-color: #f8d7da'] * len(row) # Atıl Stok (Kırmızı/Pembe)
             return [''] * len(row)
 
         st.data_editor(
@@ -271,7 +275,7 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # BÖLÜM 3: ANA KATEGORİ (DÜZENLENEBİLİR VE TOTAL CİROYA BAĞLI)
+        # BÖLÜM 3: ANA KATEGORİ (DÜZENLENEBİLİR)
         st.markdown("### 📊 Ana Kategori Toplu Özet Görünümü (Düzenlenebilir)")
         st.markdown("Bu alanda fiyat girişi yaparak genel Ana Kategori hedefini manuel ezebilirsiniz. Ana Kategori fiyatını değiştirdiğinizde en üstteki **🔥 Toplam Hedef Ciro** anında güncellenir.")
         
@@ -294,8 +298,10 @@ if uploaded_file is not None:
                 return ['background-color: #ffcccc'] * len(row)
             elif '🚀' in str(row['Genel Bot Aksiyonu']) or '✅' in str(row['Genel Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
-            elif '⚠️' in str(row['Genel Bot Aksiyonu']) or '📉' in str(row['Genel Bot Aksiyonu']):
-                return ['background-color: #f8d7da'] * len(row)
+            elif '📉' in str(row['Genel Bot Aksiyonu']):
+                return ['background-color: #cce5ff'] * len(row) # Yavaş Satış (Açık Mavi)
+            elif '⚠️' in str(row['Genel Bot Aksiyonu']):
+                return ['background-color: #f8d7da'] * len(row) # Atıl Stok (Kırmızı/Pembe)
             return [''] * len(row)
 
         st.data_editor(
