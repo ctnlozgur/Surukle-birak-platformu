@@ -87,6 +87,7 @@ if uploaded_file is not None:
             elif "vip" in name_clean: return f"VIP{cift_mi}"
             elif "genel giriş" in name_clean or "genel giris" in name_clean: return f"Genel Giriş{cift_mi}"
             elif "ayakta" in name_clean: return f"Ayakta{cift_mi}"
+            elif "davetiye" in name_clean: return f"Davetiye{cift_mi}" # YENİ EKLENEN DAVETİYE KURALI
             else: return f"Diğer{cift_mi}"
 
         df['Ana Kategori'] = df['Alt Kategori'].apply(categorize)
@@ -129,7 +130,6 @@ if uploaded_file is not None:
         konsolide_df['Sifir_Stok_Mu'] = konsolide_df['Kalan Stok'] <= 0
         konsolide_df = konsolide_df.sort_values(by=['Sifir_Stok_Mu', 'Ana Kategori', 'Alt Kategori']).reset_index(drop=True)
         
-        # Sütun sırasını Alt Kategori başa gelecek şekilde ayarlıyoruz
         mevcut_sutunlar = konsolide_df.columns.tolist()
         mevcut_sutunlar.remove('Alt Kategori')
         mevcut_sutunlar.remove('Ana Kategori')
@@ -247,9 +247,9 @@ if uploaded_file is not None:
             elif '🚀' in str(row['Bot Aksiyonu']) or '✅' in str(row['Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
             elif '📉' in str(row['Bot Aksiyonu']):
-                return ['background-color: #cce5ff'] * len(row) # Yavaş Satış (Açık Mavi)
+                return ['background-color: #cce5ff'] * len(row)
             elif '⚠️' in str(row['Bot Aksiyonu']):
-                return ['background-color: #f8d7da'] * len(row) # Atıl Stok (Kırmızı/Pembe)
+                return ['background-color: #f8d7da'] * len(row)
             return [''] * len(row)
 
         st.data_editor(
@@ -299,9 +299,9 @@ if uploaded_file is not None:
             elif '🚀' in str(row['Genel Bot Aksiyonu']) or '✅' in str(row['Genel Bot Aksiyonu']):
                 return ['background-color: #d4edda'] * len(row)
             elif '📉' in str(row['Genel Bot Aksiyonu']):
-                return ['background-color: #cce5ff'] * len(row) # Yavaş Satış (Açık Mavi)
+                return ['background-color: #cce5ff'] * len(row)
             elif '⚠️' in str(row['Genel Bot Aksiyonu']):
-                return ['background-color: #f8d7da'] * len(row) # Atıl Stok (Kırmızı/Pembe)
+                return ['background-color: #f8d7da'] * len(row)
             return [''] * len(row)
 
         st.data_editor(
