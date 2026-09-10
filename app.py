@@ -3,6 +3,10 @@ import streamlit as st
 import pandas as pd
 import re
 import plotly.express as px
+import streamlit as st
+import pandas as pd
+import datetime
+import re
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Akıllı Biletleme & Dinamik Fiyat Dashboard", layout="wide", page_icon="🎫")
