@@ -9,6 +9,10 @@ st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wid
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
 st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. V4.0 algoritması analiz yapar, yeni fiyatı manuel değiştirdiğinizde toplam ciro hedefleri anında güncellenir.")
 
+# --- 🧠 KALICI HAFIZA SİSTEMİ (Burası 1 sn sonra silinmeyi engeller) ---
+if "kalici_fiyatlar" not in st.session_state:
+    st.session_state.kalici_fiyatlar = {}
+
 # --- KULLANICI GİRDİLERİ (YAN MENÜ) ---
 with st.sidebar:
     st.header("⚙️ Etkinlik Ayarları")
@@ -20,6 +24,7 @@ uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", typ
 
 if uploaded_file is not None:
     with st.spinner('Rapor işleniyor, V4.0 bot kararları hesaplanıyor...'):
+        
         # 1. VERİ OKUMA VE TEMİZLEME
         df_raw = pd.read_excel(uploaded_file, header=6)
         df = df_raw.iloc[:, 0:6].dropna(subset=['Koltuk Grubu', 'Fiyat']).copy()
@@ -30,7 +35,7 @@ if uploaded_file is not None:
             
         df['Satılan'] = df['Stok'] - df['Kalan Stok']
 
-        # 2. AKILLI KATEGORİZASYON (Semantik Gruplama)
+        # 2. AKILLI KATEGORİZASYON 
         def categorize(name):
             name_clean = str(name).replace('İ', 'i').replace('I', 'ı').lower()
             kat_match = re.search(r'(\d+)\.\s*kategori', name_clean)
@@ -87,26 +92,35 @@ if uploaded_file is not None:
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # 5. MANUEL FİYAT SÜTUNU VE "SESSION STATE" ENTEGRASYONU
-        # Başlangıçta botun önerisini manuel fiyat olarak atıyoruz
+        # 5. MANUEL FİYAT VE HAFIZA YÖNETİMİ
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
         konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
 
-        # EĞER KULLANICI TABLODAN FİYAT DEĞİŞTİRDİYSE, BU DEĞİŞİKLİĞİ YAKALA VE UYGULA
+        # Adım A: Varsa eski hafızadaki değişiklikleri tabloya yükle (Silinmeyi engeller)
+        for i, row in konsolide_df.iterrows():
+            kat_adi = row['Ana Kategori']
+            if kat_adi in st.session_state.kalici_fiyatlar:
+                konsolide_df.at[i, '✍️ Manuel Yeni Fiyat'] = st.session_state.kalici_fiyatlar[kat_adi]
+
+        # Adım B: Kullanıcı tablo üzerinden ŞU AN bir değişiklik yaptıysa onu yakala ve hafızaya yaz
         if "bilet_tablosu" in st.session_state:
             degisiklikler = st.session_state["bilet_tablosu"].get("edited_rows", {})
             for row_idx, degisim in degisiklikler.items():
                 if "✍️ Manuel Yeni Fiyat" in degisim:
-                    # Kullanıcının girdiği yeni değeri ana veri setine kalıcı olarak yazıyoruz
-                    konsolide_df.at[row_idx, "✍️ Manuel Yeni Fiyat"] = float(degisim["✍️ Manuel Yeni Fiyat"])
+                    yeni_deger = float(degisim["✍️ Manuel Yeni Fiyat"])
+                    konsolide_df.at[row_idx, "✍️ Manuel Yeni Fiyat"] = yeni_deger
+                    
+                    # Bu değişikliği kalıcı hafızaya kazı
+                    kat_adi = konsolide_df.at[row_idx, 'Ana Kategori']
+                    st.session_state.kalici_fiyatlar[kat_adi] = yeni_deger
 
-        # 6. YENİDEN HESAPLAMA (Excel mantığı: Kullanıcı fiyat girer girmez toplam ciro hesaplanır)
+        # 6. YENİDEN HESAPLAMA (Manuel Fiyat * Kalan Stok)
         konsolide_df['Hedef Sold-Out Ciro (TL)'] = (konsolide_df['✍️ Manuel Yeni Fiyat'] * konsolide_df['Kalan Stok']) + konsolide_df['Mevcut Ciro']
 
         # --- DASHBOARD GÖRSELLERİ ---
         st.divider()
         
-        # ÜST METRİKLER (KPI) - Artık revize edilmiş ciro hedefini gösteriyor
+        # ÜST METRİKLER (KPI)
         toplam_stok = int(konsolide_df['Stok'].sum())
         toplam_satilan = int(konsolide_df['Satılan'].sum())
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
@@ -139,7 +153,6 @@ if uploaded_file is not None:
         
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
 
-        # Tabloya 'key="bilet_tablosu"' ekledik. Bu sayede girilen değişiklikleri üstte yakalayabiliyoruz.
         st.data_editor(
             konsolide_df.style.format(format_dict).map(
                 lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
@@ -162,4 +175,4 @@ if uploaded_file is not None:
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Lütfen güncel Bilet Satış (Örn: Erdal Erzincan Konseri) Excel raporunuzu yükleyin.")
+    st.info("Lütfen güncel Bilet Satış Excel raporunuzu yükleyin.")
