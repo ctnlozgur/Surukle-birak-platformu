@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
-st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Süper bilet ciroları ayrıştırılır ve hesaplamalar **Liste Fiyatı** değil, gerçekleşen **İndirimli Fiyat (Gerçek Satış Tutarı)** üzerinden kusursuzca yapılır.")
+st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Süper bilet ciroları fiyat bazında (örn: 1575₺ ve 1350₺) ayrı ayrı hesaplanır ve çifte sayım (double-counting) engellenerek **gerçek indirimli ciro** yansıtılır.")
 
 # --- 🧠 KALICI HAFIZA SİSTEMİ ---
 if "kalici_fiyatlar" not in st.session_state:
@@ -15,6 +15,7 @@ if "kalici_fiyatlar" not in st.session_state:
 if "ana_kalici_fiyatlar" not in st.session_state:
     st.session_state.ana_kalici_fiyatlar = {}
 
+# --- KULLANICI GİRDİLERİ (YAN MENÜ) ---
 with st.sidebar:
     st.header("⚙️ Etkinlik Ayarları")
     hedef_doluluk = st.slider("Hedef Doluluk Oranı (%)", min_value=50, max_value=100, value=85) / 100
@@ -26,11 +27,13 @@ with st.sidebar:
         st.session_state.ana_kalici_fiyatlar = {}
         st.rerun()
 
+# --- DOSYA YÜKLEME ALANI ---
 uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
     with st.spinner('Rapor işleniyor, Gerçek cirolar (İndirimli) ayrıştırılıyor...'):
         
+        # 1. HAM VERİYİ VE TARİHİ OKUMA
         df_raw = pd.read_excel(uploaded_file, header=None)
         
         try:
@@ -52,7 +55,6 @@ if uploaded_file is not None:
             df_main[col] = pd.to_numeric(df_main[col], errors='coerce').fillna(0)
             
         df_main['Satılan'] = df_main['Stok'] - df_main['Kalan Stok']
-        # DÜZELTME: Hesaplamayı Liste Fiyatından değil, İndirimli (Satılan) Fiyattan al.
         df_main['Gecerli_Fiyat'] = df_main['İnd. Fiyat'] 
 
         # 3. SÜPER BİLETLERİ AYIKLAMA
@@ -68,18 +70,14 @@ if uploaded_file is not None:
 
         # 4. YENİ BİRLEŞTİRME VE ÇİFTE SAYIM (SPLIT) ALGORİTMA
         if not df_super.empty:
-            df_super_sub = df_super[['Alt Kategori', 'SB İnd. Fiyat', 'Satılan']].rename(
-                columns={'Satılan': 'SB_Satılan'}
-            )
-            df_super_sub = df_super_sub.groupby('Alt Kategori').agg({
-                'SB İnd. Fiyat': 'mean', 
-                'SB_Satılan': 'sum'
-            }).reset_index()
+            # Sadece kategorinin toplam süper bilet satılanını al (Ortalama fiyata dokunma)
+            df_super_agg = df_super.groupby('Alt Kategori')['Satılan'].sum().reset_index().rename(columns={'Satılan': 'Toplam_SB_Satılan'})
 
-            merged = pd.merge(df_main, df_super_sub, on='Alt Kategori', how='left')
-            merged['SB_Satılan'] = merged['SB_Satılan'].fillna(0)
+            merged = pd.merge(df_main, df_super_agg, on='Alt Kategori', how='left')
+            merged['Toplam_SB_Satılan'] = merged['Toplam_SB_Satılan'].fillna(0)
             
-            merged['Normal_Satılan'] = merged['Satılan'] - merged['SB_Satılan']
+            # Ana stok havuzundan süper biletleri eksiltiyoruz
+            merged['Normal_Satılan'] = merged['Satılan'] - merged['Toplam_SB_Satılan']
             merged['Normal_Satılan'] = merged['Normal_Satılan'].apply(lambda x: x if x > 0 else 0)
             
             # A. Normal Bilet Satırları
@@ -87,15 +85,15 @@ if uploaded_file is not None:
             df_normal['Satılan'] = df_normal['Normal_Satılan']
             df_normal['Stok'] = df_normal['Satılan'] + df_normal['Kalan Stok']
             df_normal['Is_Super_Bilet'] = False
-            df_normal['Fiyat'] = df_normal['Gecerli_Fiyat'] # Gerçek Satılan Fiyat Ataması
+            df_normal['Fiyat'] = df_normal['Gecerli_Fiyat'] 
             
-            # B. Süper Bilet Satırları
-            df_sb = merged[merged['SB_Satılan'] > 0].copy()
-            df_sb['Alt Kategori'] = df_sb['Alt Kategori'].astype(str) + " (Süper Bilet)"
-            df_sb['Fiyat'] = df_sb['SB İnd. Fiyat'] # Süper Biletin Satıldığı Fiyat
-            df_sb['Satılan'] = df_sb['SB_Satılan']
+            # B. Süper Bilet Satırları (Aynı kategorideki farklı indirimleri fiyata göre ayrı satırlara bölüyoruz)
+            df_sb = df_super[df_super['Satılan'] > 0].copy()
+            df_sb['Alt Kategori'] = df_sb['Alt Kategori'].astype(str) + " (Süper Bilet - " + df_sb['SB İnd. Fiyat'].astype(int).astype(str) + "₺)"
+            df_sb['Fiyat'] = df_sb['SB İnd. Fiyat'] 
+            df_sb['Satılan'] = df_sb['Satılan']
             df_sb['Kalan Stok'] = 0
-            df_sb['Stok'] = df_sb['SB_Satılan']
+            df_sb['Stok'] = df_sb['Satılan']
             df_sb['Is_Super_Bilet'] = True
             
             df = pd.concat([
@@ -127,7 +125,7 @@ if uploaded_file is not None:
 
         df['Ana Kategori'] = df['Alt Kategori'].apply(categorize)
 
-        # 6. ALT KATEGORİ KONSOLİDASYONU
+        # 6. ALT KATEGORİ KONSOLİDASYONU (DETAY TABLOSU)
         konsolide_df = df.groupby(['Ana Kategori', 'Alt Kategori', 'Is_Super_Bilet']).agg({
             'Stok': 'sum',
             'Satılan': 'sum',
@@ -138,7 +136,6 @@ if uploaded_file is not None:
         konsolide_df['Doluluk Oranı'] = konsolide_df.apply(
             lambda x: x['Satılan'] / x['Stok'] if x['Stok'] > 0 else 0, axis=1
         )
-        # Artık gerçek (indirimli) fiyatlar üzerinden ciro hesaplanıyor
         konsolide_df['Mevcut Ciro'] = konsolide_df['Satılan'] * konsolide_df['Fiyat']
 
         # 7. BOT ALGORİTMASI
@@ -162,7 +159,7 @@ if uploaded_file is not None:
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # 8. SIRALAMA VE SÜTUN YER DEĞİŞTİRME
+        # 8. SIRALAMA VE SÜTUN YER DEĞİŞTİRME 
         konsolide_df['Sifir_Stok_Mu'] = konsolide_df['Kalan Stok'] <= 0
         konsolide_df = konsolide_df.sort_values(by=['Sifir_Stok_Mu', 'Ana Kategori', 'Alt Kategori']).reset_index(drop=True)
         
@@ -172,7 +169,7 @@ if uploaded_file is not None:
         yeni_sutun_sirasi = ['Alt Kategori', 'Ana Kategori'] + mevcut_sutunlar
         konsolide_df = konsolide_df[yeni_sutun_sirasi]
 
-        # 9. MANUEL FİYAT VE HAFIZA
+        # 9. ALT KATEGORİ MANUEL FİYAT VE HAFIZA
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
         konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
 
