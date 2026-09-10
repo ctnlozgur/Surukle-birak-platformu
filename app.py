@@ -38,15 +38,13 @@ if uploaded_file is not None:
             # Ana Kategori
             kat_match = re.search(r'(\d+)\.\s*kategori', name_clean)
             if kat_match:
-                kat = f"{kat_match.group(1)}. Kategori"
-            elif "sahne önü" in name_clean or "sahne onu" in name_clean: kat = "Sahne Önü"
-            elif "protokol" in name_clean: kat = "Protokol"
-            elif "gold" in name_clean: kat = "Gold"
-            elif "silver" in name_clean: kat = "Silver"
-            elif "vip" in name_clean: kat = "VIP"
-            else: kat = "Diğer"
-            
-            return kat
+                return f"{kat_match.group(1)}. Kategori"
+            elif "sahne önü" in name_clean or "sahne onu" in name_clean: return "Sahne Önü"
+            elif "protokol" in name_clean: return "Protokol"
+            elif "gold" in name_clean: return "Gold"
+            elif "silver" in name_clean: return "Silver"
+            elif "vip" in name_clean: return "VIP"
+            else: return "Diğer"
 
         df['Ana Kategori'] = df['Koltuk Grubu'].apply(categorize)
 
@@ -97,6 +95,11 @@ if uploaded_file is not None:
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
+        # 5. MANUEL YENİ FİYAT SÜTUNU EKLEME
+        # Sütunu 'Önerilen Fiyat' sütununun hemen sağına ekliyoruz
+        sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
+        konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
+
         # --- DASHBOARD GÖRSELLERİ ---
         st.divider()
         
@@ -116,21 +119,7 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
-        st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
-        # YENİ: Manuel Fiyat Girdisi Sütunu Ekliyoruz
-        # Başlangıçta botun önerisiyle dolsun (sıfırdan yazmakla uğraşmaman için)
-        sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
-        konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
-
-        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
-        st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
-        # YENİ: Manuel Fiyat Girdisi Sütunu Ekliyoruz
-        # Başlangıçta botun önerisiyle dolsun (sıfırdan yazmakla uğraşmaman için)
-        sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
-        konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
-
-        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
+        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI (DÜZENLENEBİLİR)
         st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
         
         # Tabloyu formatlı gösterme
@@ -142,14 +131,14 @@ if uploaded_file is not None:
             'Doluluk Oranı': '{:.1%}',
             'Mevcut Ciro': '₺{:,.0f}',
             'Önerilen Fiyat (TL)': '₺{:,.0f}',
-            '✍️ Manuel Yeni Fiyat': '{:.0f}', # Düzenleneceği için sade sayı formatında bırakıyoruz
+            '✍️ Manuel Yeni Fiyat': '{:.0f}', 
             'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
         }
         
-        # Sadece "Manuel Yeni Fiyat" sütunu düzenlenebilsin diye diğerlerini kilitliyoruz
+        # '✍️ Manuel Yeni Fiyat' dışındaki tüm sütunları kilitliyoruz
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
 
-        # st.dataframe YERİNE st.data_editor KULLANIYORUZ
+        # applymap yerine map kullanılarak renk kodlaması yapıldı ve tablo düzenlenebilir hale getirildi
         edited_df = st.data_editor(
             konsolide_df.style.format(format_dict).map(
                 lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
@@ -157,11 +146,8 @@ if uploaded_file is not None:
                 subset=['Bot Aksiyonu']
             ), 
             use_container_width=True,
-            disabled=kilitli_sutunlar # Diğer sütunlara müdahaleyi kapatır
+            disabled=kilitli_sutunlar 
         )
-        
-        # İleride sisteme yeni özellikler katmak istersen, "edited_df" değişkeni
-        # senin manuel olarak girdiğin fiyatları tutar. Bu sayede manuel ciro projeksiyonu da yaptırabiliriz.
 
         # GRAFİK: DOLULUK ORANLARI
         st.markdown("### 📈 Kategori Doluluk Hızları")
@@ -174,4 +160,4 @@ if uploaded_file is not None:
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Lütfen güncel Bilet Satış (Erdal Erzincan) Excel raporunuzu yükleyin.")
+    st.info("Lütfen güncel Bilet Satış (Örn: Erdal Erzincan Konseri) Excel raporunuzu yükleyin.")
