@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import re
 import plotly.express as px
-pip install streamlit pandas openpyxl plotly
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Akıllı Biletleme & Dinamik Fiyat Dashboard", layout="wide", page_icon="🎫")
