@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
-st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Fiyat bazında gerçek ciro sağlama motoru, davetiye sıfırlama, kapalı/stoklu biletler için mor renk gösterimi ve kusursuz Süper Bilet ayrıştırması aktiftir.")
+st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Süper bilet ciroları çifte sayımdan arındırılır; Davetiye ve 'Kapalı' statüsündeki biletler ciro hesabından otomatik düşülerek gerçek gelir hesaplanır.")
 
 # --- 🧠 KALICI HAFIZA SİSTEMİ ---
 if "kalici_fiyatlar" not in st.session_state:
@@ -31,7 +31,7 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Rapor işleniyor, Gerçek cirolar Fiyat Bazında Gruplama tablosundan teyit ediliyor...'):
+    with st.spinner('Rapor işleniyor, Gerçek cirolar ayrıştırılıyor...'):
         
         # 1. HAM VERİYİ VE TARİHİ OKUMA
         df_raw = pd.read_excel(uploaded_file, header=None)
@@ -44,39 +44,21 @@ if uploaded_file is not None:
         except:
             kalan_gun = "Bilinmiyor"
 
-        # 2. GERÇEK CİROYU "FİYAT BAZINDA GRUPLAMA" BÖLÜMÜNDEN OKUMA
+        # Fiyat Bazında Gruplama Satırını Bul (Sınır olarak kullanmak için)
         fiyat_bazinda_idx = df_raw[df_raw[0].astype(str).str.contains("Fiyat Bazında Gruplama", na=False)].index
-        end_idx = None
-        gercek_toplam_ciro = 0.0
+        end_idx = fiyat_bazinda_idx[0] if len(fiyat_bazinda_idx) > 0 else len(df_raw)
 
-        if len(fiyat_bazinda_idx) > 0:
-            end_idx = fiyat_bazinda_idx[0]
-            df_fb = df_raw.iloc[end_idx+1:, 0:3].copy()
-            df_fb.columns = ['Fiyat', 'Stok', 'Kalan Stok']
-            df_fb = df_fb.dropna(subset=['Fiyat'])
-            
-            # Sadece geçerli sayısal fiyat içeren satırları al
-            df_fb = df_fb[df_fb['Fiyat'].apply(lambda x: str(x).replace('.','').replace(',','').isdigit() if str(x) != 'nan' else False)]
-            
-            for col in ['Fiyat', 'Stok', 'Kalan Stok']:
-                df_fb[col] = pd.to_numeric(df_fb[col], errors='coerce').fillna(0.0)
-                
-            # Formül: Fiyatlar * (Stok - Kalan Stok)
-            df_fb['Satılan'] = df_fb['Stok'] - df_fb['Kalan Stok']
-            gercek_toplam_ciro = (df_fb['Satılan'] * df_fb['Fiyat']).sum()
-
-        # 3. ANA BİLETLERİ AYIKLAMA (Sadece end_idx'e kadar)
-        df_main = df_raw.iloc[7:end_idx if end_idx else None, 0:6].copy()
+        # 2. ANA BİLETLERİ AYIKLAMA
+        df_main = df_raw.iloc[7:end_idx, 0:6].copy()
         df_main.columns = ['Alt Kategori', 'Fiyat', 'İnd. Fiyat', 'Stok', 'Kalan Stok', 'Satış Durumu']
         df_main = df_main.dropna(subset=['Alt Kategori', 'Fiyat'])
         df_main = df_main[~df_main['Alt Kategori'].astype(str).str.contains("TOPLAM|Fiyat Bazında", na=False, case=False)]
         df_main = df_main[~df_main['Alt Kategori'].apply(lambda x: str(x).isnumeric() or str(x).replace('.','',1).isdigit())]
         
-        # Boşluk (Whitespace) Temizliği
+        # Boşluk Temizliği
         df_main['Alt Kategori'] = df_main['Alt Kategori'].astype(str).str.strip()
         df_main['Satış Durumu'] = df_main['Satış Durumu'].astype(str).str.strip()
         
-        # Ana kategori satış durumlarını bir sözlüğe (dictionary) alıyoruz (Süper biletlere aktarmak için)
         status_map = df_main.set_index('Alt Kategori')['Satış Durumu'].to_dict()
 
         for col in ['Fiyat', 'İnd. Fiyat', 'Stok', 'Kalan Stok']:
@@ -85,12 +67,12 @@ if uploaded_file is not None:
         df_main['Satılan'] = df_main['Stok'] - df_main['Kalan Stok']
         df_main['Gecerli_Fiyat'] = df_main['İnd. Fiyat'] 
 
-        # 4. SÜPER BİLETLERİ AYIKLAMA
+        # 3. SÜPER BİLETLERİ AYIKLAMA
         df_super = pd.DataFrame()
         if df_raw.shape[1] >= 14:
             super_baslik = str(df_raw.iloc[6, 7])
             if "Süper Bilet" in super_baslik:
-                df_super = df_raw.iloc[7:end_idx if end_idx else None, 7:14].copy()
+                df_super = df_raw.iloc[7:end_idx, 7:14].copy()
                 df_super.columns = ['Alt Kategori', 'İndirim Türü', 'İndirim Oranı', 'Fiyat', 'SB İnd. Fiyat', 'Satılan', 'Kalan Stok']
                 df_super = df_super.dropna(subset=['Alt Kategori', 'Fiyat'])
                 
@@ -99,7 +81,7 @@ if uploaded_file is not None:
                 for col in ['Fiyat', 'SB İnd. Fiyat', 'Satılan', 'Kalan Stok']:
                     df_super[col] = pd.to_numeric(df_super[col], errors='coerce').fillna(0.0)
 
-        # 5. YENİ BİRLEŞTİRME VE ÇİFTE SAYIM (SPLIT) ALGORİTMA
+        # 4. YENİ BİRLEŞTİRME VE ÇİFTE SAYIM (SPLIT) ALGORİTMA
         if not df_super.empty:
             df_super_agg = df_super.groupby('Alt Kategori', as_index=False)['Satılan'].sum()
             df_super_agg.rename(columns={'Satılan': 'Toplam_SB_Satılan'}, inplace=True)
@@ -110,18 +92,14 @@ if uploaded_file is not None:
             merged['Normal_Satılan'] = merged['Satılan'] - merged['Toplam_SB_Satılan']
             merged['Normal_Satılan'] = merged['Normal_Satılan'].apply(lambda x: x if x > 0 else 0)
             
-            # A. Normal Bilet Satırları
             df_normal = merged.copy()
             df_normal['Satılan'] = df_normal['Normal_Satılan']
             df_normal['Stok'] = df_normal['Satılan'] + df_normal['Kalan Stok']
             df_normal['Is_Super_Bilet'] = False
             df_normal['Fiyat'] = df_normal['Gecerli_Fiyat'] 
             
-            # B. Süper Bilet Satırları 
             df_sb = df_super[df_super['Satılan'] > 0].copy()
-            # Süper biletlerin Satış Durumu bilgisini ana biletlerden çekiyoruz
             df_sb['Satış Durumu'] = df_sb['Alt Kategori'].map(status_map).fillna("Açık")
-            
             df_sb['Alt Kategori'] = df_sb['Alt Kategori'] + " (Süper Bilet - " + df_sb['SB İnd. Fiyat'].astype(str) + " ₺)"
             df_sb['Fiyat'] = df_sb['SB İnd. Fiyat'] 
             df_sb['Satılan'] = df_sb['Satılan']
@@ -139,7 +117,7 @@ if uploaded_file is not None:
             df = df[['Alt Kategori', 'Fiyat', 'Stok', 'Kalan Stok', 'Satılan', 'Satış Durumu']]
             df['Is_Super_Bilet'] = False
 
-        # 6. KATEGORİZASYON (DAVETİYE KURALI BURADA)
+        # 5. KATEGORİZASYON 
         def categorize(name):
             name_clean = str(name).replace('İ', 'i').replace('I', 'ı').lower()
             kat_match = re.search(r'(\d+)\.\s*kategori', name_clean)
@@ -158,27 +136,27 @@ if uploaded_file is not None:
 
         df['Ana Kategori'] = df['Alt Kategori'].apply(categorize)
 
-        # 7. ALT KATEGORİ KONSOLİDASYONU
+        # 6. ALT KATEGORİ KONSOLİDASYONU
         konsolide_df = df.groupby(['Ana Kategori', 'Alt Kategori', 'Is_Super_Bilet']).agg({
             'Stok': 'sum',
             'Satılan': 'sum',
             'Kalan Stok': 'sum',
             'Fiyat': 'mean',
-            'Satış Durumu': 'first' # Durumu muhafaza ediyoruz
+            'Satış Durumu': 'first'
         }).reset_index()
 
         konsolide_df['Doluluk Oranı'] = konsolide_df.apply(
             lambda x: x['Satılan'] / x['Stok'] if x['Stok'] > 0 else 0, axis=1
         )
         
-        # --- YENİ EKLENEN KURAL: DAVETİYE CİRO SIFIRLAMASI ---
+        # --- CİRO SIFIRLAMA KURALI (DAVETİYE VEYA KAPALIYSA SIFIRLA) ---
         konsolide_df['Mevcut Ciro'] = konsolide_df.apply(
-            lambda x: 0.0 if 'Davetiye' in x['Ana Kategori'] else (x['Satılan'] * x['Fiyat']), axis=1
+            lambda x: 0.0 if ('Davetiye' in x['Ana Kategori'] or str(x.get('Satış Durumu', '')).lower() == 'kapalı') else (x['Satılan'] * x['Fiyat']), axis=1
         )
 
-        # 8. BOT ALGORİTMASI
+        # 7. BOT ALGORİTMASI
         def dinamik_bot_karari(row):
-            if str(row.get('Satış Durumu', '')).lower() == 'kapalı': return row['Fiyat'], "🔒 Satışa Kapalı"
+            if str(row.get('Satış Durumu', '')).lower() == 'kapalı': return row['Fiyat'], "🔒 Satışa Kapalı (İade/İptal)"
             if float(row['Stok']) <= 0: return row['Fiyat'], "Aksiyon Yok"
             if float(row['Kalan Stok']) <= 0: return row['Fiyat'], "✅ Sold-Out (Tükendi)"
             
@@ -198,7 +176,7 @@ if uploaded_file is not None:
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # 9. SIRALAMA 
+        # 8. SIRALAMA
         konsolide_df['Sifir_Stok_Mu'] = konsolide_df['Kalan Stok'] <= 0
         konsolide_df = konsolide_df.sort_values(by=['Sifir_Stok_Mu', 'Ana Kategori', 'Alt Kategori']).reset_index(drop=True)
         
@@ -208,7 +186,7 @@ if uploaded_file is not None:
         yeni_sutun_sirasi = ['Alt Kategori', 'Ana Kategori'] + mevcut_sutunlar
         konsolide_df = konsolide_df[yeni_sutun_sirasi]
 
-        # 10. ALT KATEGORİ MANUEL FİYAT VE HAFIZA
+        # 9. ALT KATEGORİ MANUEL FİYAT VE HAFIZA
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
         konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
 
@@ -226,12 +204,12 @@ if uploaded_file is not None:
                     alt_kat = konsolide_df.loc[row_idx, 'Alt Kategori']
                     st.session_state.kalici_fiyatlar[alt_kat] = yeni_deger
 
-        # Davetiyelerin hedef ciro tahmini de 0 kalmalıdır
+        # Kapalı ve Davetiye biletlerin Hedef Cirosu da her halükarda 0 kalır
         konsolide_df['Hedef Sold-Out Ciro (TL)'] = konsolide_df.apply(
-            lambda x: 0.0 if 'Davetiye' in x['Ana Kategori'] else (x['✍️ Manuel Yeni Fiyat'] * x['Kalan Stok']) + x['Mevcut Ciro'], axis=1
+            lambda x: 0.0 if ('Davetiye' in x['Ana Kategori'] or str(x.get('Satış Durumu', '')).lower() == 'kapalı') else (x['✍️ Manuel Yeni Fiyat'] * x['Kalan Stok']) + x['Mevcut Ciro'], axis=1
         )
 
-        # 11. ANA KATEGORİ KONSOLİDASYONU
+        # 10. ANA KATEGORİ KONSOLİDASYONU
         ana_kategori_df = konsolide_df.groupby('Ana Kategori').agg({
             'Stok': 'sum',
             'Satılan': 'sum',
@@ -281,10 +259,11 @@ if uploaded_file is not None:
         
         ana_kategori_df = ana_kategori_df[['Ana Kategori', 'Stok', 'Satılan', 'Kalan Stok', 'Fiyat', 'Doluluk Oranı', 'Mevcut Ciro', 'Önerilen Ort. Fiyat', '✍️ Manuel Yeni Fiyat', 'Genel Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)', 'Sifir_Stok_Mu']]
 
-        # 12. TOP KPI 
+        # 11. TOP KPI
         toplam_stok = int(ana_kategori_df['Stok'].sum())
         toplam_satilan = int(ana_kategori_df['Satılan'].sum())
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
+        mevcut_toplam_ciro = ana_kategori_df['Mevcut Ciro'].sum()
         potansiyel_maks_ciro = ana_kategori_df['Hedef Sold-Out Ciro (TL)'].sum()
 
         # --- ARAYÜZ ---
@@ -295,8 +274,7 @@ if uploaded_file is not None:
         col2.metric("Toplam Kapasite", f"{toplam_stok:,.0f}")
         col3.metric("Satılan Bilet", f"{toplam_satilan:,.0f}")
         col4.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
-        # Gerçek ciroyu "Fiyat Bazında Gruplama" altından direkt gösteriyoruz.
-        col5.metric("Gerçekleşen Ciro (Excel)", f"₺{gercek_toplam_ciro:,.2f}")
+        col5.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.2f}")
         col6.metric("🔥 Tahmini Hedef Ciro", f"₺{potansiyel_maks_ciro:,.2f}")
 
         st.divider()
@@ -321,7 +299,6 @@ if uploaded_file is not None:
         def row_color(row):
             satis_durumu = str(row.get('Satış Durumu', '')).strip().lower()
             
-            # Kapalı olup stoğu (kapasitesi) varsa Mor yap! (Hem normal hem süper biletler için)
             if satis_durumu == 'kapalı' and float(row['Stok']) > 0:
                 return ['background-color: #e6ccff'] * len(row) # Mor Renk
             elif row.get('Is_Super_Bilet', False):
@@ -343,7 +320,7 @@ if uploaded_file is not None:
             column_config={
                 "Sifir_Stok_Mu": None, 
                 "Is_Super_Bilet": None,
-                "Satış Durumu": None # Ekranda karmaşa yaratmaması için durumu sütun olarak gizledik, rengi yetiyor
+                "Satış Durumu": None
             },
             key="bilet_tablosu"
         )
