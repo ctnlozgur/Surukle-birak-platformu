@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
-st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Süper bilet ciroları çifte sayımdan arındırılır; Davetiye biletler ciro hesabından otomatik düşülerek gerçek gelir hesaplanır.")
+st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. Kalan gün bazlı **Zaman-Doluluk Hız Katsayısı (Yield Pacing)** motoru, prestij bilet koruması ve Süper Bilet ayrıştırması aktiftir.")
 
 # --- 🧠 KALICI HAFIZA SİSTEMİ ---
 if "kalici_fiyatlar" not in st.session_state:
@@ -19,7 +19,7 @@ if "ana_kalici_fiyatlar" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Etkinlik Ayarları")
     hedef_doluluk = st.slider("Hedef Doluluk Oranı (%)", min_value=50, max_value=100, value=85) / 100
-    st.info("Algoritma, bu hedef doluluğa ve biletlerin erime hızına göre fiyat önerileri sunar.")
+    st.info("Algoritma; hedeflenen doluluğa, etkinliğe kalan gün sayısına ve bilet kategorisinin prestij hassasiyetine göre dinamik tavsiye üretir.")
     
     st.divider()
     if st.button("🔄 Manuel Fiyatları Sıfırla", use_container_width=True):
@@ -31,7 +31,7 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Rapor işleniyor, Gerçek cirolar ayrıştırılıyor...'):
+    with st.spinner('Rapor işleniyor, dinamik gelir motoru çalıştırılıyor...'):
         
         # 1. HAM VERİYİ VE TARİHİ OKUMA
         df_raw = pd.read_excel(uploaded_file, header=None)
@@ -42,7 +42,7 @@ if uploaded_file is not None:
             bugun = pd.to_datetime("2026-09-10") 
             kalan_gun = (etkinlik_tarihi - bugun).days
         except:
-            kalan_gun = "Bilinmiyor"
+            kalan_gun = 15 # Varsayılan referans
 
         # Fiyat Bazında Gruplama Satırını Bul (Sınır olarak kullanmak için)
         fiyat_bazinda_idx = df_raw[df_raw[0].astype(str).str.contains("Fiyat Bazında Gruplama", na=False)].index
@@ -55,7 +55,6 @@ if uploaded_file is not None:
         df_main = df_main[~df_main['Alt Kategori'].astype(str).str.contains("TOPLAM|Fiyat Bazında", na=False, case=False)]
         df_main = df_main[~df_main['Alt Kategori'].apply(lambda x: str(x).isnumeric() or str(x).replace('.','',1).isdigit())]
         
-        # Boşluk Temizliği
         df_main['Alt Kategori'] = df_main['Alt Kategori'].astype(str).str.strip()
         
         for col in ['Fiyat', 'İnd. Fiyat', 'Stok', 'Kalan Stok']:
@@ -144,29 +143,72 @@ if uploaded_file is not None:
             lambda x: x['Satılan'] / x['Stok'] if x['Stok'] > 0 else 0, axis=1
         )
         
-        # --- CİRO SIFIRLAMA KURALI (SADECE DAVETİYE SIFIRLANIR) ---
+        # Davetiye Cirosu = 0, Kapalı olanlar dahil diğer tüm biletler ciroya tam yansır
         konsolide_df['Mevcut Ciro'] = konsolide_df.apply(
             lambda x: 0.0 if 'Davetiye' in x['Ana Kategori'] else (x['Satılan'] * x['Fiyat']), axis=1
         )
 
-        # 7. BOT ALGORİTMASI
+        # 7. 🧠 ZAMAN-DOLULUK VE HASSASİYET DUYARLI YIELD BOT ALGORİTMASI
         def dinamik_bot_karari(row):
-            if float(row['Stok']) <= 0: return row['Fiyat'], "Aksiyon Yok"
-            if float(row['Kalan Stok']) <= 0: return row['Fiyat'], "✅ Sold-Out (Tükendi)"
-            
+            stok = float(row['Stok'])
+            kalan_stok = float(row['Kalan Stok'])
             doluluk = row['Doluluk Oranı']
-            mevcut_fiyat = row['Fiyat']
+            mevcut_fiyat = float(row['Fiyat'])
+            kategori_str = (str(row.get('Ana Kategori', '')) + " " + str(row.get('Alt Kategori', ''))).lower()
+
+            if stok <= 0:
+                return mevcut_fiyat, "Aksiyon Yok"
+            if kalan_stok <= 0:
+                return mevcut_fiyat, "✅ Sold-Out (Tükendi)"
+            if 'davetiye' in kategori_str:
+                return 0.0, "🎁 Bedelsiz Davetiye (Yield Muaf)"
+
+            # Prestij / Düşük Fiyat Esnekliği Kontrolü (Asla indirim yapılamaz)
+            prestij_mi = any(k in kategori_str for k in ['vip', 'sahne önü', 'sahne onu', 'protokol', 'gold'])
             
-            if doluluk >= hedef_doluluk and row['Kalan Stok'] > 0:
-                return mevcut_fiyat * 1.15, "🚀 Yüksek Talep! Fiyatı %15 Artır"
-            elif doluluk >= 0.60 and row['Kalan Stok'] > 0:
-                return mevcut_fiyat * 1.05, "📈 Hızlı Erime. Fiyatı %5 Artır"
-            elif doluluk <= 0.25 and row['Satılan'] > 0:
-                return mevcut_fiyat * 0.90, "📉 Yavaş Satış. %10 İndirim"
-            elif doluluk == 0:
-                return mevcut_fiyat * 0.85, "⚠️ Atıl Stok! %15 Flash İndirim"
+            gun = kalan_gun if isinstance(kalan_gun, (int, float)) else 15
+
+            # --- FAZ 1: ERKEN AŞAMA (> 21 Gün) ---
+            if gun > 21:
+                if doluluk >= 0.45:
+                    return mevcut_fiyat * 1.15, "🚀 Erken Patlama! Fiyatı %15 Artır"
+                elif doluluk >= 0.25:
+                    return mevcut_fiyat * 1.05, "📈 Sağlıklı Erken Tempo (+%5 Zam)"
+                else:
+                    return mevcut_fiyat, f"⏳ Erken Aşama ({gun} Gün). İndirim Yapma, Bekle."
+
+            # --- FAZ 2: ORTA DÖNEM (10 - 21 Gün) ---
+            elif 10 <= gun <= 21:
+                if doluluk >= 0.70:
+                    return mevcut_fiyat * 1.15, "🚀 Yüksek Talep! Fiyatı %15 Artır"
+                elif doluluk >= 0.40:
+                    return mevcut_fiyat, "⏳ Optimum Seyir. Fiyatı Koru."
+                else:
+                    if prestij_mi:
+                        return mevcut_fiyat, "⏳ Prestij Koltuk. Fiyatı Koru."
+                    return mevcut_fiyat * 0.90, "📉 Yavaş Satış. %10 İndirim / Çift Kişilik Paket"
+
+            # --- FAZ 3: SICAK DÖNEM (4 - 9 Gün) ---
+            elif 4 <= gun < 10:
+                if doluluk >= 0.80:
+                    return mevcut_fiyat * 1.20, "🔥 Son Koltuklar! Tavan Fiyat (+%20 Zam)"
+                elif doluluk >= 0.55:
+                    return mevcut_fiyat, "⏳ Doğal Seyirde Erir. Bekle."
+                else:
+                    if prestij_mi:
+                        return mevcut_fiyat, "⏳ Prestij Kategorisi (İndirim Yasak)"
+                    return mevcut_fiyat * 0.80, "🚨 Kritik Risk! %20 İndirim / B2B Aç"
+
+            # --- FAZ 4: SON DÜZLÜK (0 - 3 Gün) ---
             else:
-                return mevcut_fiyat, "⏳ Optimum Seyir. Bekle."
+                if doluluk >= 0.85:
+                    return mevcut_fiyat * 1.15, "🎟️ Kapı Satışı Premium Fiyatı (+%15)"
+                elif doluluk >= 0.60:
+                    return mevcut_fiyat, "⏳ Kapı Akışı Bekleniyor."
+                else:
+                    if prestij_mi:
+                        return mevcut_fiyat, "⏳ VIP Koltuk. Sabit Tut."
+                    return mevcut_fiyat * 0.70, "⚡ Flash Sale! Boş Koltuk Kurtarma (%30 İndirim)"
 
         konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
@@ -198,7 +240,6 @@ if uploaded_file is not None:
                     alt_kat = konsolide_df.loc[row_idx, 'Alt Kategori']
                     st.session_state.kalici_fiyatlar[alt_kat] = yeni_deger
 
-        # Davetiyelerin hedef ciro tahmini de 0 kalmalıdır
         konsolide_df['Hedef Sold-Out Ciro (TL)'] = konsolide_df.apply(
             lambda x: 0.0 if 'Davetiye' in x['Ana Kategori'] else (x['✍️ Manuel Yeni Fiyat'] * x['Kalan Stok']) + x['Mevcut Ciro'], axis=1
         )
@@ -253,10 +294,10 @@ if uploaded_file is not None:
         
         ana_kategori_df = ana_kategori_df[['Ana Kategori', 'Stok', 'Satılan', 'Kalan Stok', 'Fiyat', 'Doluluk Oranı', 'Mevcut Ciro', 'Önerilen Ort. Fiyat', '✍️ Manuel Yeni Fiyat', 'Genel Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)', 'Sifir_Stok_Mu']]
 
-        # 11. TOP KPI
+        # 11. TOP KPI 
         toplam_stok = int(ana_kategori_df['Stok'].sum())
         toplam_satilan = int(ana_kategori_df['Satılan'].sum())
-        kalan_toplam_stok = toplam_stok - toplam_satilan # YENİ EKLENDİ
+        kalan_toplam_stok = toplam_stok - toplam_satilan
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
         mevcut_toplam_ciro = ana_kategori_df['Mevcut Ciro'].sum()
         potansiyel_maks_ciro = ana_kategori_df['Hedef Sold-Out Ciro (TL)'].sum()
@@ -264,7 +305,6 @@ if uploaded_file is not None:
         # --- ARAYÜZ ---
         st.divider()
         
-        # KPI paneline Kalan Stok Eklendi
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         col1.metric("⏳ Kalan Gün", f"{kalan_gun}")
         col2.metric("Toplam Kapasite", f"{toplam_stok:,.0f}")
@@ -294,17 +334,19 @@ if uploaded_file is not None:
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
 
         def row_color(row):
-            # Tükendi veya Aksiyon Yok ise Gri (#f0f0f0)
-            if '✅ Sold-Out' in str(row['Bot Aksiyonu']) or 'Aksiyon Yok' in str(row['Bot Aksiyonu']):
-                return ['background-color: #f0f0f0'] * len(row)
+            aksiyon = str(row['Bot Aksiyonu'])
+            if '✅ Sold-Out' in aksiyon or 'Aksiyon Yok' in aksiyon:
+                return ['background-color: #f0f0f0'] * len(row) # Gri
             elif row.get('Is_Super_Bilet', False):
-                return ['background-color: #ffe8cc'] * len(row)
-            elif '🚀' in str(row['Bot Aksiyonu']):
-                return ['background-color: #d4edda'] * len(row)
-            elif '📉' in str(row['Bot Aksiyonu']):
-                return ['background-color: #cce5ff'] * len(row)
-            elif '⚠️' in str(row['Bot Aksiyonu']):
-                return ['background-color: #f8d7da'] * len(row)
+                return ['background-color: #ffe8cc'] * len(row) # Turuncu
+            elif '🚀' in aksiyon or '🔥' in aksiyon:
+                return ['background-color: #d4edda'] * len(row) # Yeşil (Agresif Zam)
+            elif '📈' in aksiyon or '🎟️' in aksiyon:
+                return ['background-color: #e8f5e9'] * len(row) # Açık Yeşil
+            elif '📉' in aksiyon:
+                return ['background-color: #cce5ff'] * len(row) # Açık Mavi (Paket/İndirim Uyarısı)
+            elif '🚨' in aksiyon or '⚡' in aksiyon:
+                return ['background-color: #f8d7da'] * len(row) # Pembe/Kırmızı (Acil Durum İndirimi)
             return [''] * len(row)
 
         st.data_editor(
@@ -348,13 +390,16 @@ if uploaded_file is not None:
         kilitli_sutunlar_ana = [col for col in ana_kategori_df.columns if col != '✍️ Manuel Yeni Fiyat']
         
         def row_color_ana(row):
-            if '✅ Sold-Out' in str(row['Genel Bot Aksiyonu']) or 'Aksiyon Yok' in str(row['Genel Bot Aksiyonu']):
+            aksiyon = str(row['Genel Bot Aksiyonu'])
+            if '✅ Sold-Out' in aksiyon or 'Aksiyon Yok' in aksiyon:
                 return ['background-color: #f0f0f0'] * len(row)
-            elif '🚀' in str(row['Genel Bot Aksiyonu']):
+            elif '🚀' in aksiyon or '🔥' in aksiyon:
                 return ['background-color: #d4edda'] * len(row)
-            elif '📉' in str(row['Genel Bot Aksiyonu']):
+            elif '📈' in aksiyon or '🎟️' in aksiyon:
+                return ['background-color: #e8f5e9'] * len(row)
+            elif '📉' in aksiyon:
                 return ['background-color: #cce5ff'] * len(row)
-            elif '⚠️' in str(row['Genel Bot Aksiyonu']):
+            elif '🚨' in aksiyon or '⚡' in aksiyon:
                 return ['background-color: #f8d7da'] * len(row)
             return [''] * len(row)
 
