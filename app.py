@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
-st.markdown("Etkinlik satış raporunu (Biletleme sistemi Excel çıktısı) aşağıya sürükleyin. V4.0 algoritması ile otomatik analiz, stok eritme ve dinamik fiyat aksiyonları anında hesaplanacaktır.")
+st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. V4.0 algoritması analiz yapar, yeni fiyatı manuel değiştirdiğinizde toplam ciro hedefleri anında güncellenir.")
 
 # --- KULLANICI GİRDİLERİ (YAN MENÜ) ---
 with st.sidebar:
@@ -21,7 +21,6 @@ uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", typ
 if uploaded_file is not None:
     with st.spinner('Rapor işleniyor, V4.0 bot kararları hesaplanıyor...'):
         # 1. VERİ OKUMA VE TEMİZLEME
-        # Rapor 7. satırdan başladığı için header=6
         df_raw = pd.read_excel(uploaded_file, header=6)
         df = df_raw.iloc[:, 0:6].dropna(subset=['Koltuk Grubu', 'Fiyat']).copy()
         df = df[~df['Koltuk Grubu'].str.contains("TOPLAM|Fiyat Bazında", na=False, case=False)]
@@ -34,11 +33,8 @@ if uploaded_file is not None:
         # 2. AKILLI KATEGORİZASYON (Semantik Gruplama)
         def categorize(name):
             name_clean = str(name).replace('İ', 'i').replace('I', 'ı').lower()
-            
-            # Ana Kategori
             kat_match = re.search(r'(\d+)\.\s*kategori', name_clean)
-            if kat_match:
-                return f"{kat_match.group(1)}. Kategori"
+            if kat_match: return f"{kat_match.group(1)}. Kategori"
             elif "sahne önü" in name_clean or "sahne onu" in name_clean: return "Sahne Önü"
             elif "protokol" in name_clean: return "Protokol"
             elif "gold" in name_clean: return "Gold"
@@ -48,12 +44,12 @@ if uploaded_file is not None:
 
         df['Ana Kategori'] = df['Koltuk Grubu'].apply(categorize)
 
-        # 3. KATEGORİ BAZLI KONSOLİDASYON (V4.0 Mantığı)
+        # 3. KATEGORİ BAZLI KONSOLİDASYON
         konsolide_df = df.groupby('Ana Kategori').agg({
             'Stok': 'sum',
             'Satılan': 'sum',
             'Kalan Stok': 'sum',
-            'Fiyat': 'mean' # Ortalama Fiyat
+            'Fiyat': 'mean' 
         }).reset_index()
 
         konsolide_df['Doluluk Oranı'] = konsolide_df.apply(
@@ -64,14 +60,13 @@ if uploaded_file is not None:
         # 4. V4.0 DİNAMİK FİYAT VE BOT YORUM ALGORİTMASI
         def dinamik_bot_karari(row):
             if row['Stok'] == 0: 
-                return row['Fiyat'], "Aksiyon Yok", 0
+                return row['Fiyat'], "Aksiyon Yok"
             if row['Kalan Stok'] == 0: 
-                return row['Fiyat'], "✅ Sold-Out (Tükendi)", row['Mevcut Ciro']
+                return row['Fiyat'], "✅ Sold-Out (Tükendi)"
             
             doluluk = row['Doluluk Oranı']
             mevcut_fiyat = row['Fiyat']
             
-            # Bot Karar Ağacı
             if doluluk >= hedef_doluluk and row['Kalan Stok'] > 0:
                 yeni_fiyat = mevcut_fiyat * 1.15
                 aksiyon = "🚀 Yüksek Talep! Fiyatı %15 Artır"
@@ -88,22 +83,30 @@ if uploaded_file is not None:
                 yeni_fiyat = mevcut_fiyat
                 aksiyon = "⏳ Optimum Seyir. Bekle."
 
-            # Soldout Ciro Projeksiyonu (Yeni fiyat x Kalan Stok + Mevcut Ciro)
-            hedef_soldout_ciro = (yeni_fiyat * row['Kalan Stok']) + row['Mevcut Ciro']
-            
-            return yeni_fiyat, aksiyon, hedef_soldout_ciro
+            return yeni_fiyat, aksiyon
 
-        konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
+        konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
 
-        # 5. MANUEL YENİ FİYAT SÜTUNU EKLEME
-        # Sütunu 'Önerilen Fiyat' sütununun hemen sağına ekliyoruz
+        # 5. MANUEL FİYAT SÜTUNU VE "SESSION STATE" ENTEGRASYONU
+        # Başlangıçta botun önerisini manuel fiyat olarak atıyoruz
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
         konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
+
+        # EĞER KULLANICI TABLODAN FİYAT DEĞİŞTİRDİYSE, BU DEĞİŞİKLİĞİ YAKALA VE UYGULA
+        if "bilet_tablosu" in st.session_state:
+            degisiklikler = st.session_state["bilet_tablosu"].get("edited_rows", {})
+            for row_idx, degisim in degisiklikler.items():
+                if "✍️ Manuel Yeni Fiyat" in degisim:
+                    # Kullanıcının girdiği yeni değeri ana veri setine kalıcı olarak yazıyoruz
+                    konsolide_df.at[row_idx, "✍️ Manuel Yeni Fiyat"] = float(degisim["✍️ Manuel Yeni Fiyat"])
+
+        # 6. YENİDEN HESAPLAMA (Excel mantığı: Kullanıcı fiyat girer girmez toplam ciro hesaplanır)
+        konsolide_df['Hedef Sold-Out Ciro (TL)'] = (konsolide_df['✍️ Manuel Yeni Fiyat'] * konsolide_df['Kalan Stok']) + konsolide_df['Mevcut Ciro']
 
         # --- DASHBOARD GÖRSELLERİ ---
         st.divider()
         
-        # ÜST METRİKLER (KPI)
+        # ÜST METRİKLER (KPI) - Artık revize edilmiş ciro hedefini gösteriyor
         toplam_stok = int(konsolide_df['Stok'].sum())
         toplam_satilan = int(konsolide_df['Satılan'].sum())
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
@@ -119,10 +122,9 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI (DÜZENLENEBİLİR)
+        # ANA TABLO
         st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
         
-        # Tabloyu formatlı gösterme
         format_dict = {
             'Stok': '{:,.0f}',
             'Satılan': '{:,.0f}',
@@ -135,21 +137,21 @@ if uploaded_file is not None:
             'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
         }
         
-        # '✍️ Manuel Yeni Fiyat' dışındaki tüm sütunları kilitliyoruz
         kilitli_sutunlar = [col for col in konsolide_df.columns if col != '✍️ Manuel Yeni Fiyat']
 
-        # applymap yerine map kullanılarak renk kodlaması yapıldı ve tablo düzenlenebilir hale getirildi
-        edited_df = st.data_editor(
+        # Tabloya 'key="bilet_tablosu"' ekledik. Bu sayede girilen değişiklikleri üstte yakalayabiliyoruz.
+        st.data_editor(
             konsolide_df.style.format(format_dict).map(
                 lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
                           ('background-color: #f8d7da' if '⚠️' in str(x) or '📉' in str(x) else ''), 
                 subset=['Bot Aksiyonu']
             ), 
             use_container_width=True,
-            disabled=kilitli_sutunlar 
+            disabled=kilitli_sutunlar,
+            key="bilet_tablosu"
         )
 
-        # GRAFİK: DOLULUK ORANLARI
+        # GRAFİK
         st.markdown("### 📈 Kategori Doluluk Hızları")
         fig = px.bar(konsolide_df, x="Ana Kategori", y="Doluluk Oranı", 
                      text="Doluluk Oranı", color="Doluluk Oranı", 
