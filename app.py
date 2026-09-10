@@ -9,7 +9,7 @@ st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wid
 st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
 st.markdown("Etkinlik satış raporunu aşağıya sürükleyin. V4.0 algoritması analiz yapar, yeni fiyatı manuel değiştirdiğinizde toplam ciro hedefleri anında güncellenir.")
 
-# --- 🧠 KALICI HAFIZA SİSTEMİ (Burası 1 sn sonra silinmeyi engeller) ---
+# --- 🧠 KALICI HAFIZA SİSTEMİ ---
 if "kalici_fiyatlar" not in st.session_state:
     st.session_state.kalici_fiyatlar = {}
 
@@ -35,17 +35,23 @@ if uploaded_file is not None:
             
         df['Satılan'] = df['Stok'] - df['Kalan Stok']
 
-        # 2. AKILLI KATEGORİZASYON 
+        # 2. GELİŞMİŞ AKILLI KATEGORİZASYON 
         def categorize(name):
             name_clean = str(name).replace('İ', 'i').replace('I', 'ı').lower()
             kat_match = re.search(r'(\d+)\.\s*kategori', name_clean)
-            if kat_match: return f"{kat_match.group(1)}. Kategori"
-            elif "sahne önü" in name_clean or "sahne onu" in name_clean: return "Sahne Önü"
-            elif "protokol" in name_clean: return "Protokol"
-            elif "gold" in name_clean: return "Gold"
-            elif "silver" in name_clean: return "Silver"
-            elif "vip" in name_clean: return "VIP"
-            else: return "Diğer"
+            
+            # Ciro hesabının şaşmaması için Çift Kişilik olanları ayrı kategorize ediyoruz
+            cift_mi = " (Çift Kişilik)" if "çift" in name_clean or "cift" in name_clean else ""
+            
+            if kat_match: return f"{kat_match.group(1)}. Kategori{cift_mi}"
+            elif "sahne önü" in name_clean or "sahne onu" in name_clean: return f"Sahne Önü{cift_mi}"
+            elif "protokol" in name_clean: return f"Protokol{cift_mi}"
+            elif "gold" in name_clean: return f"Gold{cift_mi}"
+            elif "silver" in name_clean: return f"Silver{cift_mi}"
+            elif "vip" in name_clean: return f"VIP{cift_mi}"
+            elif "genel giriş" in name_clean or "genel giris" in name_clean: return f"Genel Giriş{cift_mi}"
+            elif "ayakta" in name_clean: return f"Ayakta{cift_mi}"
+            else: return f"Diğer{cift_mi}"
 
         df['Ana Kategori'] = df['Koltuk Grubu'].apply(categorize)
 
@@ -96,13 +102,11 @@ if uploaded_file is not None:
         sutun_sirasi = konsolide_df.columns.get_loc('Önerilen Fiyat (TL)') + 1
         konsolide_df.insert(sutun_sirasi, '✍️ Manuel Yeni Fiyat', konsolide_df['Önerilen Fiyat (TL)'])
 
-        # Adım A: Varsa eski hafızadaki değişiklikleri tabloya yükle (Silinmeyi engeller)
         for i, row in konsolide_df.iterrows():
             kat_adi = row['Ana Kategori']
             if kat_adi in st.session_state.kalici_fiyatlar:
                 konsolide_df.at[i, '✍️ Manuel Yeni Fiyat'] = st.session_state.kalici_fiyatlar[kat_adi]
 
-        # Adım B: Kullanıcı tablo üzerinden ŞU AN bir değişiklik yaptıysa onu yakala ve hafızaya yaz
         if "bilet_tablosu" in st.session_state:
             degisiklikler = st.session_state["bilet_tablosu"].get("edited_rows", {})
             for row_idx, degisim in degisiklikler.items():
@@ -110,17 +114,15 @@ if uploaded_file is not None:
                     yeni_deger = float(degisim["✍️ Manuel Yeni Fiyat"])
                     konsolide_df.at[row_idx, "✍️ Manuel Yeni Fiyat"] = yeni_deger
                     
-                    # Bu değişikliği kalıcı hafızaya kazı
                     kat_adi = konsolide_df.at[row_idx, 'Ana Kategori']
                     st.session_state.kalici_fiyatlar[kat_adi] = yeni_deger
 
-        # 6. YENİDEN HESAPLAMA (Manuel Fiyat * Kalan Stok)
+        # 6. YENİDEN HESAPLAMA
         konsolide_df['Hedef Sold-Out Ciro (TL)'] = (konsolide_df['✍️ Manuel Yeni Fiyat'] * konsolide_df['Kalan Stok']) + konsolide_df['Mevcut Ciro']
 
         # --- DASHBOARD GÖRSELLERİ ---
         st.divider()
         
-        # ÜST METRİKLER (KPI)
         toplam_stok = int(konsolide_df['Stok'].sum())
         toplam_satilan = int(konsolide_df['Satılan'].sum())
         genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
@@ -136,7 +138,6 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # ANA TABLO
         st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
         
         format_dict = {
@@ -164,7 +165,6 @@ if uploaded_file is not None:
             key="bilet_tablosu"
         )
 
-        # GRAFİK
         st.markdown("### 📈 Kategori Doluluk Hızları")
         fig = px.bar(konsolide_df, x="Ana Kategori", y="Doluluk Oranı", 
                      text="Doluluk Oranı", color="Doluluk Oranı", 
