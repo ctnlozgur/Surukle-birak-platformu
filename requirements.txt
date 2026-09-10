@@ -1,3 +1,5 @@
+Plaintext
 streamlit
 pandas
 openpyxl
+plotly
