@@ -3,32 +3,35 @@ import pandas as pd
 import re
 import plotly.express as px
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Akıllı Biletleme & Dinamik Fiyat Dashboard", layout="wide", page_icon="🎫")
+# --- SAYFA AYARLARI VE BAŞLIK ---
+st.set_page_config(page_title="V4.0 Dinamik Biletleme & Fiyat Botu", layout="wide", page_icon="🎫")
 
-st.title("🎫 Akıllı Biletleme & Dinamik Fiyatlandırma Merkezi")
-st.markdown("Etkinlik raporunuzu (Örn: Erdal Erzincan Konseri) aşağıya sürükleyin. Sistem isim karmaşasını çözecek ve doluluk oranına göre fiyat simülasyonu yapacaktır.")
+st.title("🎫 V4.0 Dinamik Biletleme ve Fiyatlandırma Botu")
+st.markdown("Etkinlik satış raporunu (Biletleme sistemi Excel çıktısı) aşağıya sürükleyin. V4.0 algoritması ile otomatik analiz, stok eritme ve dinamik fiyat aksiyonları anında hesaplanacaktır.")
 
-# --- DOSYA YÜKLEME ---
-uploaded_file = st.file_uploader("Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"])
+# --- KULLANICI GİRDİLERİ (YAN MENÜ) ---
+with st.sidebar:
+    st.header("⚙️ Etkinlik Ayarları")
+    hedef_doluluk = st.slider("Hedef Doluluk Oranı (%)", min_value=50, max_value=100, value=85) / 100
+    st.info("Algoritma, bu hedef doluluğa ve biletlerin erime hızına göre fiyat önerileri sunar.")
+
+# --- DOSYA YÜKLEME ALANI ---
+uploaded_file = st.file_uploader("Bilet Satış Raporunu Yükleyin (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
-    with st.spinner('Veriler analiz ediliyor ve kategorize ediliyor...'):
-        # Veriyi 7. satırdan (header=6) itibaren oku
-        df = pd.read_excel(uploaded_file, header=6)
-        
-        # Sadece ilgili sütunları al ve boş/gereksiz satırları temizle
-        df = df.iloc[:, 0:6].dropna(subset=['Koltuk Grubu', 'Fiyat'])
+    with st.spinner('Rapor işleniyor, V4.0 bot kararları hesaplanıyor...'):
+        # 1. VERİ OKUMA VE TEMİZLEME
+        # Rapor 7. satırdan başladığı için header=6
+        df_raw = pd.read_excel(uploaded_file, header=6)
+        df = df_raw.iloc[:, 0:6].dropna(subset=['Koltuk Grubu', 'Fiyat']).copy()
         df = df[~df['Koltuk Grubu'].str.contains("TOPLAM|Fiyat Bazında", na=False, case=False)]
         
-        # Veri tiplerini düzelt
-        for col in ['Fiyat', 'İnd. Fiyat', 'Stok', 'Kalan Stok']:
+        for col in ['Fiyat', 'Stok', 'Kalan Stok']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-        # Satılan bilet sayısını hesapla
+            
         df['Satılan'] = df['Stok'] - df['Kalan Stok']
 
-        # --- AKILLI KATEGORİZASYON FONKSİYONU ---
+        # 2. AKILLI KATEGORİZASYON (Semantik Gruplama)
         def categorize(name):
             name_clean = str(name).replace('İ', 'i').replace('I', 'ı').lower()
             
@@ -42,90 +45,107 @@ if uploaded_file is not None:
             elif "silver" in name_clean: kat = "Silver"
             elif "vip" in name_clean: kat = "VIP"
             else: kat = "Diğer"
-                
-            # Bilet Tipi
-            if "çift kişilik" in name_clean or "cift kisilik" in name_clean: tip = "Çift Kişilik"
-            elif "indirim" in name_clean or "fırsat" in name_clean: tip = "İndirimli"
-            elif "öğrenci" in name_clean: tip = "Öğrenci"
-            else: tip = "Standart"
-                
-            return pd.Series([kat, tip])
-
-        df[['Ana Kategori', 'Bilet Tipi']] = df['Koltuk Grubu'].apply(categorize)
-
-        # --- DİNAMİK FİYATLANDIRMA ALGORİTMASI ---
-        def dinamik_fiyat_hesapla(row):
-            if row['Stok'] == 0: return row['Fiyat'], "Aksiyon Yok"
             
-            doluluk = row['Satılan'] / row['Stok']
-            mevcut_fiyat = row['Fiyat']
-            
-            # Simülasyon Kuralları (Stok erime hızına göre)
-            if doluluk >= 0.85 and row['Kalan Stok'] > 0:
-                return mevcut_fiyat * 1.15, "🚀 %15 Fiyat Artır (Yüksek Talep)"
-            elif doluluk >= 0.65 and row['Kalan Stok'] > 0:
-                return mevcut_fiyat * 1.05, "📈 %5 Fiyat Artır (İyi İvme)"
-            elif doluluk <= 0.20 and row['Satılan'] > 0: # Hiç satılmadıysa bekletilebilir
-                return mevcut_fiyat * 0.90, "📉 %10 İndirim Yap (Düşük Talep)"
-            elif row['Kalan Stok'] == 0:
-                return mevcut_fiyat, "Tükendi (Sold Out)"
-            else:
-                return mevcut_fiyat, "Bekle (Optimum Seyir)"
+            return kat
 
-        df[['Önerilen Fiyat', 'Aksiyon Önerisi']] = df.apply(dinamik_fiyat_hesapla, axis=1, result_type="expand")
-        
-        # Toplam Ciro Hesaplama
-        df['Mevcut Ciro'] = df['Satılan'] * df['İnd. Fiyat']
+        df['Ana Kategori'] = df['Koltuk Grubu'].apply(categorize)
 
-        # --- DASHBOARD ARAYÜZÜ ---
-        
-        # 1. Özet Metrikler
-        st.markdown("### 📊 Genel Etkinlik Özeti")
-        toplam_stok = int(df['Stok'].sum())
-        toplam_satilan = int(df['Satılan'].sum())
-        genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
-        toplam_ciro = df['Mevcut Ciro'].sum()
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Toplam Kapasite", f"{toplam_stok}")
-        col2.metric("Satılan Bilet", f"{toplam_satilan}")
-        col3.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
-        col4.metric("Tahmini Mevcut Ciro", f"₺{toplam_ciro:,.0f}")
-
-        st.divider()
-
-        # 2. Ana Tablo ve Aksiyonlar
-        st.markdown("### 🧠 Kategori Bazlı Dinamik Fiyatlandırma Aksiyonları")
-        
-        # Sadece analiz için gerekli sütunları göster
-        display_df = df[['Ana Kategori', 'Bilet Tipi', 'Stok', 'Kalan Stok', 'Satılan', 'Fiyat', 'Önerilen Fiyat', 'Aksiyon Önerisi']]
-        
-        # Kategoriye göre gruplayıp gösterme
-        grouped_df = display_df.groupby(['Ana Kategori', 'Bilet Tipi']).agg({
+        # 3. KATEGORİ BAZLI KONSOLİDASYON (V4.0 Mantığı)
+        konsolide_df = df.groupby('Ana Kategori').agg({
             'Stok': 'sum',
             'Satılan': 'sum',
             'Kalan Stok': 'sum',
-            'Fiyat': 'mean'
+            'Fiyat': 'mean' # Ortalama Fiyat
         }).reset_index()
+
+        konsolide_df['Doluluk Oranı'] = konsolide_df.apply(
+            lambda x: x['Satılan'] / x['Stok'] if x['Stok'] > 0 else 0, axis=1
+        )
+        konsolide_df['Mevcut Ciro'] = konsolide_df['Satılan'] * konsolide_df['Fiyat']
+
+        # 4. V4.0 DİNAMİK FİYAT VE BOT YORUM ALGORİTMASI
+        def dinamik_bot_karari(row):
+            if row['Stok'] == 0: 
+                return row['Fiyat'], "Aksiyon Yok", 0
+            if row['Kalan Stok'] == 0: 
+                return row['Fiyat'], "✅ Sold-Out (Tükendi)", row['Mevcut Ciro']
+            
+            doluluk = row['Doluluk Oranı']
+            mevcut_fiyat = row['Fiyat']
+            
+            # Bot Karar Ağacı
+            if doluluk >= hedef_doluluk and row['Kalan Stok'] > 0:
+                yeni_fiyat = mevcut_fiyat * 1.15
+                aksiyon = "🚀 Yüksek Talep! Fiyatı %15 Artır"
+            elif doluluk >= 0.60 and row['Kalan Stok'] > 0:
+                yeni_fiyat = mevcut_fiyat * 1.05
+                aksiyon = "📈 Hızlı Erime. Fiyatı %5 Artır"
+            elif doluluk <= 0.25 and row['Satılan'] > 0:
+                yeni_fiyat = mevcut_fiyat * 0.90
+                aksiyon = "📉 Yavaş Satış. %10 İndirim veya Paket Çık"
+            elif doluluk == 0:
+                yeni_fiyat = mevcut_fiyat * 0.85
+                aksiyon = "⚠️ Atıl Stok! %15 Flash İndirim veya B2B Sat"
+            else:
+                yeni_fiyat = mevcut_fiyat
+                aksiyon = "⏳ Optimum Seyir. Bekle."
+
+            # Soldout Ciro Projeksiyonu (Yeni fiyat x Kalan Stok + Mevcut Ciro)
+            hedef_soldout_ciro = (yeni_fiyat * row['Kalan Stok']) + row['Mevcut Ciro']
+            
+            return yeni_fiyat, aksiyon, hedef_soldout_ciro
+
+        konsolide_df[['Önerilen Fiyat (TL)', 'Bot Aksiyonu', 'Hedef Sold-Out Ciro (TL)']] = konsolide_df.apply(dinamik_bot_karari, axis=1, result_type="expand")
+
+        # --- DASHBOARD GÖRSELLERİ ---
+        st.divider()
         
-        # Gruplanmış veri üzerinden tekrar dinamik fiyat önerisi hesapla
-        grouped_df[['Önerilen Fiyat', 'Aksiyon Önerisi']] = grouped_df.apply(dinamik_fiyat_hesapla, axis=1, result_type="expand")
-        
-        # Tabloyu formatlayıp ekrana bas
-        st.dataframe(grouped_df.style.format({
-            "Fiyat": "₺{:.0f}",
-            "Önerilen Fiyat": "₺{:.0f}"
-        }), use_container_width=True)
+        # ÜST METRİKLER (KPI)
+        toplam_stok = int(konsolide_df['Stok'].sum())
+        toplam_satilan = int(konsolide_df['Satılan'].sum())
+        genel_doluluk = (toplam_satilan / toplam_stok) * 100 if toplam_stok > 0 else 0
+        mevcut_toplam_ciro = konsolide_df['Mevcut Ciro'].sum()
+        potansiyel_maks_ciro = konsolide_df['Hedef Sold-Out Ciro (TL)'].sum()
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Toplam Kapasite", f"{toplam_stok}")
+        col2.metric("Satılan Bilet", f"{toplam_satilan}")
+        col3.metric("Genel Doluluk", f"%{genel_doluluk:.1f}")
+        col4.metric("Kazanılan Ciro", f"₺{mevcut_toplam_ciro:,.0f}")
+        col5.metric("🔥 Hedef Sold-Out Ciro", f"₺{potansiyel_maks_ciro:,.0f}")
 
         st.divider()
 
-        # 3. Görselleştirme
-        st.markdown("### 📈 Kategori Bazlı Satış Performansı")
-        fig = px.bar(grouped_df, x="Ana Kategori", y=["Satılan", "Kalan Stok"], 
-                     color="Bilet Tipi", barmode="stack",
-                     title="Hangi Kategori Ne Kadar Sattı?",
-                     labels={"value": "Bilet Adedi", "variable": "Durum"})
+        # ANA TABLO: KATEGORİ BAZLI FİYAT VE STOK AKSİYONLARI
+        st.markdown("### 🤖 V4.0 Kategori Bazlı Dinamik Fiyatlandırma ve Bot Önerileri")
+        
+        # Tabloyu formatlı gösterme
+        format_dict = {
+            'Stok': '{:,.0f}',
+            'Satılan': '{:,.0f}',
+            'Kalan Stok': '{:,.0f}',
+            'Fiyat': '₺{:,.0f}',
+            'Doluluk Oranı': '{:.1%}',
+            'Mevcut Ciro': '₺{:,.0f}',
+            'Önerilen Fiyat (TL)': '₺{:,.0f}',
+            'Hedef Sold-Out Ciro (TL)': '₺{:,.0f}'
+        }
+        
+        st.dataframe(konsolide_df.style.format(format_dict).applymap(
+            lambda x: 'background-color: #d4edda' if '🚀' in str(x) or '✅' in str(x) else 
+                      ('background-color: #f8d7da' if '⚠️' in str(x) or '📉' in str(x) else ''), 
+            subset=['Bot Aksiyonu']
+        ), use_container_width=True)
+
+        # GRAFİK: DOLULUK ORANLARI
+        st.markdown("### 📈 Kategori Doluluk Hızları")
+        fig = px.bar(konsolide_df, x="Ana Kategori", y="Doluluk Oranı", 
+                     text="Doluluk Oranı", color="Doluluk Oranı", 
+                     color_continuous_scale="RdYlGn",
+                     title="Hangi Kategori Ne Kadar Doldu?")
+        fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
+        fig.update_layout(yaxis=dict(tickformat=".0%"))
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Lütfen analize başlamak için sol üstten veya yukarıdaki alandan Excel dosyanızı yükleyin.")
+    st.info("Lütfen güncel Bilet Satış (Erdal Erzincan) Excel raporunuzu yükleyin.")
